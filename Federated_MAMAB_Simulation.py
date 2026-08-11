@@ -1,8 +1,12 @@
 import pandas as pd
 import numpy as np
+import os
+from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
 
+# ---------------------------------------------------------
 # 1. THE LOCAL BPJS AGENT CLASS (LinUCB + BwK)
+# ---------------------------------------------------------
 class LocalBPJSAgent:
     def __init__(self, name, n_features, budget, target_rate, alpha=1.0):
         self.name = name
@@ -26,21 +30,19 @@ class LocalBPJSAgent:
         # Agent's local performance trackers
         self.audits_done = 0
         self.frauds_caught = 0
+        self.local_regret = 0.0
 
     def decide(self, x):
         x = x.reshape(-1, 1)
         
-        # Calculate score for Arm 0 (Auto-Approve)
         A0_inv = np.linalg.inv(self.A_0)
         theta_0 = A0_inv.dot(self.b_0)
         score_0 = theta_0.T.dot(x)[0,0] + self.alpha * np.sqrt(x.T.dot(A0_inv).dot(x)[0,0])
         
-        # Calculate score for Arm 1 (Audit)
         A1_inv = np.linalg.inv(self.A_1)
         theta_1 = A1_inv.dot(self.b_1)
         score_1 = theta_1.T.dot(x)[0,0] + self.alpha * np.sqrt(x.T.dot(A1_inv).dot(x)[0,0])
         
-        # Apply BwK Shadow Price to the Audit Arm
         penalized_score_1 = score_1 - self.lambda_price
         
         if penalized_score_1 > score_0 and self.remaining_budget > 0:
@@ -51,7 +53,6 @@ class LocalBPJSAgent:
     def learn(self, x, action, reward, cost):
         x = x.reshape(-1, 1)
         
-        # Update specific arm matrices
         if action == 1:
             self.A_1 += x.dot(x.T)
             self.b_1 += reward * x
@@ -61,36 +62,39 @@ class LocalBPJSAgent:
             self.A_0 += x.dot(x.T)
             self.b_0 += reward * x
             
-        # Update Shadow Price
         self.lambda_price = max(0.0, self.lambda_price + self.eta * (cost - self.target_rate))
 
+# ---------------------------------------------------------
 # 2. THE CENTRAL SERVER (Federated Aggregator)
+# ---------------------------------------------------------
 def federated_sync(agents):
-    # The Central Server averages the mathematical parameters (weights) 
-    # without ever seeing the raw patient context (x_t) or labels (y_t)
-    
     n_agents = len(agents)
     avg_A_0 = sum(agent.A_0 for agent in agents) / n_agents
     avg_b_0 = sum(agent.b_0 for agent in agents) / n_agents
     avg_A_1 = sum(agent.A_1 for agent in agents) / n_agents
     avg_b_1 = sum(agent.b_1 for agent in agents) / n_agents
     
-    # Broadcast the global blueprint back to all local branches
     for agent in agents:
         agent.A_0 = avg_A_0.copy()
         agent.b_0 = avg_b_0.copy()
         agent.A_1 = avg_A_1.copy()
         agent.b_1 = avg_b_1.copy()
         
-    print("   [Central Server] Federated Sync Complete! Global Blueprint updated.")
+    print(f"   [Central Server] Federated Sync Complete! Global Blueprint updated.")
 
+# ==========================================
 # 3. MAIN SIMULATION BLOCK
+# ==========================================
 if __name__ == "__main__":
+    
+    # --- DIRECTORY SETUP ---
+    results_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Results"
+    os.makedirs(results_dir, exist_ok=True) 
+    
     print("Loading Cleaned Data...")
     df = pd.read_csv("Data/fraud_detection_cleaned2.csv")
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
     
-    # Find the top 3 most common branch offices (kdkc) to act as our Agents
     top_branches = df['kdkc'].value_counts().index[:3]
     df_federated = df[df['kdkc'].isin(top_branches)].copy()
     
@@ -106,16 +110,17 @@ if __name__ == "__main__":
     X_live = scaler.fit_transform(X_raw)
     n_features = X_live.shape[1]
     
-    # Initialize 3 Local Agents
-    # Each gets 1/3 of the total budget
-    TOTAL_BUDGET = 50000
-    budget_per_branch = TOTAL_BUDGET // 3
-    target_rate = budget_per_branch / (n_live / 3) 
+    # --- SIMULATION PARAMETERS ---
+    n_warmup = 1000
+    TOTAL_BUDGET = 3000
+    budget_per_branch = TOTAL_BUDGET // len(top_branches)
+    target_rate = budget_per_branch / (n_live / len(top_branches)) 
+    SYNC_INTERVAL = 250
     
     agents = {
-        top_branches[0]: LocalBPJSAgent(f"Branch {top_branches[0]}", n_features, budget_per_branch, target_rate),
-        top_branches[1]: LocalBPJSAgent(f"Branch {top_branches[1]}", n_features, budget_per_branch, target_rate),
-        top_branches[2]: LocalBPJSAgent(f"Branch {top_branches[2]}", n_features, budget_per_branch, target_rate)
+        top_branches[0]: LocalBPJSAgent(f"Branch_{top_branches[0]}", n_features, budget_per_branch, target_rate),
+        top_branches[1]: LocalBPJSAgent(f"Branch_{top_branches[1]}", n_features, budget_per_branch, target_rate),
+        top_branches[2]: LocalBPJSAgent(f"Branch_{top_branches[2]}", n_features, budget_per_branch, target_rate)
     }
     
     print(f"\nStarting Federated Live Simulation with {n_live} claims across 3 Branches...")
@@ -124,8 +129,8 @@ if __name__ == "__main__":
     global_utility_saved = 0.0
     global_cumulative_regret = 0.0
     
-    # Sync the network every 500 claims (e.g., at the end of every "day")
-    SYNC_INTERVAL = 500    
+    # List to hold data for CSV export
+    history_log = []
     
     for t in range(n_live):
         x_t = X_live[t]
@@ -133,10 +138,7 @@ if __name__ == "__main__":
         u_t = utils_live[t]
         branch_id = branches_live[t]
         
-        # Route claim to the correct local agent
         agent = agents[branch_id]
-        
-        # Agent decides
         action = agent.decide(x_t)
         
         cost_t = 0
@@ -149,40 +151,80 @@ if __name__ == "__main__":
             else:
                 reward = -0.5 * u_t
                 global_cumulative_regret += 1.0
+                agent.local_regret += 1.0 # TRACK LOCAL REGRET
+
         else: # AUTO-APPROVED
             if y_t == 1:
                 reward = -1.0 * u_t
                 global_missed_frauds += 1
                 global_cumulative_regret += u_t
+                agent.local_regret += u_t # <--- TRACK LOCAL REGRET
             else:
                 reward = 0.5
                 
-        # Agent learns locally
         agent.learn(x_t, action, reward, cost_t)
         
-        # --- FEDERATED SYNC ---
+        # --- FEDERATED SYNC & DATA LOGGING ---
         if (t + 1) % SYNC_INTERVAL == 0:
             print(f"Day Complete (Processed {t+1} claims). Triggering Federated Sync...")
             federated_sync(list(agents.values()))
+            
+            # Calculate Global Hit Rate safely
+            current_network_audits = sum(a.audits_done for a in agents.values())
+            current_network_caught = sum(a.frauds_caught for a in agents.values())
+            hit_rate = (current_network_caught / current_network_audits) * 100 if current_network_audits > 0 else 0.0
+            
+            # Create a record for this timestamp
+            record = {
+                'Claims_Processed': t + 1,
+                'N_Warmup': n_warmup,
+                'N_Live_Total': n_live,
+                'Total_Budget': TOTAL_BUDGET,
+                'Budget_Per_Branch': budget_per_branch,
+                'Sync_Interval': SYNC_INTERVAL,
+                'Global_Cumulative_Regret': global_cumulative_regret,
+                'Global_Utility_Saved': global_utility_saved,
+                'Global_Frauds_Caught': current_network_caught,
+                'Global_Missed_Frauds': global_missed_frauds,
+                'Global_Audits_Done': current_network_audits,
+                'Global_Hit_Rate_%': round(hit_rate, 2)
+            }
+            
+            # Dynamically add the stats for each specific branch
+            for a in agents.values():
+                record[f'{a.name}_Audits'] = a.audits_done
+                record[f'{a.name}_Caught'] = a.frauds_caught
+                record[f'{a.name}_ShadowPrice'] = round(a.lambda_price, 4)
+                record[f'{a.name}_Regret'] = a.local_regret
+                
+            history_log.append(record)
 
-    # FINAL RESULTS
+    # ---------------------------------------------------------
+    # 4. EXPORT TO CSV
+    # ---------------------------------------------------------
+    # Generate timestamp: YYYYMMDD_HHMMSS
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"MAMAB_Results_{timestamp}.csv"
+    full_path = os.path.join(results_dir, filename)
+    
+    # Convert log to DataFrame and save
+    results_df = pd.DataFrame(history_log)
+    results_df.to_csv(full_path, index=False)
+    
+    print(f"\n[SUCCESS] Simulation complete! Data saved to: {full_path}")
+
+    # ---------------------------------------------------------
+    # FINAL TERMINAL PRINT
+    # ---------------------------------------------------------
     print("\n=== FINAL FEDERATED MAMAB EVALUATION ===")
     print(f"Total Claims Processed: {n_live}")
     
-    total_network_audits = 0
-    total_network_caught = 0
-    
     for branch_id, agent in agents.items():
         print(f" - {agent.name}: Audits = {agent.audits_done}/{budget_per_branch} | Caught = {agent.frauds_caught}")
-        total_network_audits += agent.audits_done
-        total_network_caught += agent.frauds_caught
         
-    print(f"\nGlobal Network Audits: {total_network_audits} (Max Budget {TOTAL_BUDGET})")
-    print(f"Global Frauds Caught: {total_network_caught}")
+    print(f"\nGlobal Network Audits: {current_network_audits} (Max Budget {TOTAL_BUDGET})")
+    print(f"Global Frauds Caught: {current_network_caught}")
     print(f"Global Frauds Missed: {global_missed_frauds}")
     print(f"Total Network Utility Saved: {global_utility_saved}")
     print(f"Final Cumulative Regret: {global_cumulative_regret:.2f}")
-    
-    if total_network_audits > 0:
-        hit_rate = (total_network_caught / total_network_audits) * 100
-        print(f"Federated Audit Precision (Hit Rate): {hit_rate:.2f}%")
+    print(f"Federated Audit Precision (Hit Rate): {hit_rate:.2f}%")

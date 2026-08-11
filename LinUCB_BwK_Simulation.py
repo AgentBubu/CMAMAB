@@ -1,9 +1,16 @@
 import pandas as pd
 import numpy as np
+import os
+from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
 from contextualbandits.online import LinUCB
 
 if __name__ == "__main__":
+    
+    # --- DIRECTORY SETUP ---
+    results_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Results"
+    os.makedirs(results_dir, exist_ok=True)
+    
     print("Loading Cleaned Data...")
     df = pd.read_csv("Data/fraud_detection_cleaned.csv")
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
@@ -23,7 +30,9 @@ if __name__ == "__main__":
     
     agent = LinUCB(nchoices=2, alpha=1.0)
     
+    # ---------------------------------------------------------
     # WARM-UP 
+    # ---------------------------------------------------------
     print("Running initial fit (Warm-Up)...")
     np.random.seed(123)
     a_warmup = np.random.randint(0, 2, size=n_warmup)
@@ -48,21 +57,27 @@ if __name__ == "__main__":
     agent.fit(X_warmup, a_warmup.astype(int), r_warmup.astype(float))
     print("Warm-Up Complete!\n")
     
+    # ---------------------------------------------------------
     # BANDITS WITH KNAPSACKS (BwK) SETTINGS
+    # ---------------------------------------------------------
     TOTAL_BUDGET = 50000 # 50% capacity for 100k claims
     remaining_budget = TOTAL_BUDGET
     lambda_price = 0.0  
     eta = 0.05  
     target_rate = TOTAL_BUDGET / n_live 
+    LOG_INTERVAL = 500 # Matches the Federated sync interval for easy comparison!
     
+    # ---------------------------------------------------------
     # EVALUATION TRACKERS 
+    # ---------------------------------------------------------
     total_audits = 0
     frauds_caught = 0
     total_utility_saved = 0.0
     
     missed_frauds = 0 
     running_regret = 0.0
-    cumulative_regret_history = [] 
+    
+    history_log = [] # List to hold data for CSV export
     
     print(f"Starting live simulation with BwK Constraint...")
     print(f"Total Claims: {n_live} | Max Auditor Budget: {TOTAL_BUDGET}")
@@ -71,13 +86,9 @@ if __name__ == "__main__":
         x_t = X_live[t].reshape(1, -1)
         
         # --- BwK DECISION LOGIC ---
-        # 1. Get raw UCB scores for both arms
         scores = agent.decision_function(x_t)[0]
-        
-        # 2. Apply Shadow Price to the Audit Arm
         penalized_audit_score = scores[1] - lambda_price
         
-        # 3. Make constrained decision
         if penalized_audit_score > scores[0] and remaining_budget > 0:
             action = 1 # AUDIT
         else:
@@ -97,21 +108,16 @@ if __name__ == "__main__":
                 reward = 5.0 + utility
                 frauds_caught += 1
                 total_utility_saved += utility
-                # Regret is 0 because AI made the perfect choice!
             else:
                 reward = -0.5 * utility
                 running_regret += 1.0 
         else:
-            # Action 0 (Auto-Approve) logic matching Warm-up!
             if is_fraud == 1:
                 reward = -1.0 * utility
                 missed_frauds += 1
                 running_regret += utility 
             else:
                 reward = 0.5
-            
-        # Record the cumulative regret
-        cumulative_regret_history.append(running_regret)
             
         # Update Shadow Price (Lagrange Multiplier)
         lambda_price = max(0.0, lambda_price + eta * (cost_t - target_rate))
@@ -121,12 +127,44 @@ if __name__ == "__main__":
         r_t = np.array([reward], dtype=float)
         agent.partial_fit(x_t, a_t, r_t)
         
-        # Print progress with BwK metrics
-        if (t + 1) % 5000 == 0:
+        # --- DATA LOGGING ---
+        if (t + 1) % LOG_INTERVAL == 0:
+            hit_rate = (frauds_caught / total_audits) * 100 if total_audits > 0 else 0.0
+            
+            record = {
+                'Claims_Processed': t + 1,
+                'N_Warmup': n_warmup,
+                'N_Live_Total': n_live,
+                'Total_Budget': TOTAL_BUDGET,
+                'Log_Interval': LOG_INTERVAL,
+                'Cumulative_Regret': running_regret,
+                'Total_Utility_Saved': total_utility_saved,
+                'Frauds_Caught': frauds_caught,
+                'Missed_Frauds': missed_frauds,
+                'Audits_Done': total_audits,
+                'Budget_Left': remaining_budget,
+                'Shadow_Price': round(lambda_price, 4),
+                'Hit_Rate_%': round(hit_rate, 2)
+            }
+            history_log.append(record)
             print(f"Processed {t+1} claims | Budget Left: {remaining_budget} | Shadow Price: {lambda_price:.3f} | Frauds Caught: {frauds_caught}")
 
-    # FINAL RESULTS
-    print("\n=== FINAL BwK EVALUATION ===")
+    # ---------------------------------------------------------
+    # 4. EXPORT TO CSV
+    # ---------------------------------------------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"SingleAgent_BwK_Results_{timestamp}.csv"
+    full_path = os.path.join(results_dir, filename)
+    
+    results_df = pd.DataFrame(history_log)
+    results_df.to_csv(full_path, index=False)
+    
+    print(f"\n[SUCCESS] Simulation complete! Data saved to: {full_path}")
+
+    # ---------------------------------------------------------
+    # FINAL TERMINAL PRINT
+    # ---------------------------------------------------------
+    print("\n=== FINAL SINGLE-AGENT BwK EVALUATION ===")
     print(f"Total Claims Processed: {n_live}")
     print(f"Total Claims Audited: {total_audits} (Max Budget was {TOTAL_BUDGET})")
     print(f"True Frauds Caught (True Positives): {frauds_caught}")
