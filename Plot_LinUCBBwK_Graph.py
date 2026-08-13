@@ -1,13 +1,14 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from plot_common import latest, run_single_suite
 import seaborn as sns
 import os
 import glob
 
 def generate_single_agent_graphs():
     # --- DIRECTORY SETUP ---
-    results_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Results"
-    graphs_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Graphs\LinUCB_BwK"
+    results_dir = r"Results"
+    graphs_dir = r"Graphs/LinUCB_BwK"
     os.makedirs(graphs_dir, exist_ok=True) 
 
     # --- AUTOMATICALLY FIND THE LATEST CSV --- 
@@ -115,4 +116,7 @@ def generate_single_agent_graphs():
     print(f"\n[SUCCESS] All 4 Single-Agent graphs have been saved to: {graphs_dir}")
 
 if __name__ == "__main__":
-    generate_single_agent_graphs()
+    p = latest("Results", "SingleAgent_BwK_Results_*.csv")
+    if p:
+        run_single_suite(pd.read_csv(p), "Graphs/LinUCB_BwK",
+                         "LinUCB+BwK (Single-Agent)", reference_budget=50000)

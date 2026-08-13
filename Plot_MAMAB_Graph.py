@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from plot_common import latest, run_multi_suite
 import seaborn as sns
 import numpy as np
 import os
@@ -7,8 +8,8 @@ import glob
 
 def generate_federated_graphs():
     # --- DIRECTORY SETUP ---
-    results_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Results"
-    graphs_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Graphs"
+    results_dir = r"Results"
+    graphs_dir = r"Graphs/MAMAB"
     os.makedirs(graphs_dir, exist_ok=True) 
 
     # Fill in the name of the result file
@@ -270,4 +271,7 @@ def generate_federated_graphs():
     print(f"\n[SUCCESS] All graphs have been saved to: {graphs_dir}")
 
 if __name__ == "__main__":
-    generate_federated_graphs()
+    p = latest("Results", "MAMAB_Results_*.csv")
+    if p:
+        run_multi_suite(pd.read_csv(p), "Graphs/MAMAB",
+                        "Federated MAMAB (with BwK)", reference_budget=3000)

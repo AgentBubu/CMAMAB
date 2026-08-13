@@ -1,13 +1,14 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from plot_common import latest, run_single_suite
 import seaborn as sns
 import os
 import glob
 
 def generate_pure_linucb_graphs():
     # --- DIRECTORY SETUP ---
-    results_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Results"
-    graphs_dir = r"D:\Skripsi_Fraud Detection BPJS Kesehatan\Graphs\LinUCB"
+    results_dir = r"Results/"
+    graphs_dir = r"Graphs/LinUCB"
     os.makedirs(graphs_dir, exist_ok=True) 
 
     # --- AUTOMATICALLY FIND THE LATEST CSV ---
@@ -107,4 +108,7 @@ def generate_pure_linucb_graphs():
     print(f"\n[SUCCESS] All 4 Pure LinUCB graphs have been saved to: {graphs_dir}")
 
 if __name__ == "__main__":
-    generate_pure_linucb_graphs()
+    p = latest("Results", "PureLinUCB_Results_*.csv")
+    if p:
+        run_single_suite(pd.read_csv(p), "Graphs/LinUCB",
+                         "LinUCB (Single-Agent, Unconstrained)", reference_budget=50000)
