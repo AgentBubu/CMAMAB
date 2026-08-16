@@ -18,7 +18,7 @@ class LocalBPJSAgent:
 
         # Causal regret counters
         self.local_regret_bandit = 0.0   # scorer fault: missed fraud w/ budget left, wasted slots
-        self.local_regret_pacing = 0.0   # constraint fault: missed fraud because budget was empty
+        self.local_regret_knapsackcapacity = 0.0   # constraint fault: missed fraud because budget was empty
 
         # Arm 1 (Audit) Memory Matrices
         # CORRECTION: Null arm (Auto-Approve) has a known reward of exactly 0,
@@ -101,7 +101,7 @@ def federated_sync(agents):
 # ==========================================
 if __name__ == "__main__":
 
-    results_dir = "Results"
+    results_dir = "Results Version 2.0"
     os.makedirs(results_dir, exist_ok=True)
 
     print("Loading Cleaned Data...")
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     top_branches = df['kdkc'].value_counts().index[:3]
     df_federated = df[df['kdkc'].isin(top_branches)].copy()
 
-    n_live = min(100000, len(df_federated))
+    n_live = min(10000, len(df_federated))
     df_live = df_federated.iloc[:n_live]
 
     y_live = df_live['label'].values
@@ -123,9 +123,9 @@ if __name__ == "__main__":
     X_live = scaler.fit_transform(X_raw)
     n_features = X_live.shape[1]
 
-    TOTAL_BUDGET = 3000
+    TOTAL_BUDGET = 1500
     budget_per_branch = TOTAL_BUDGET // len(top_branches)
-    SYNC_INTERVAL = 250
+    SYNC_INTERVAL = 500
     eta = 0.05
 
     agents = {
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     global_audits_done = 0
     global_caught = 0
     regret_bandit = 0.0
-    regret_pacing = 0.0
+    regret_knapsackcapacity = 0.0
 
     history_log = []
     pbar = tqdm(total=n_live, desc="Processing Claims")
@@ -188,9 +188,9 @@ if __name__ == "__main__":
                 global_missed_frauds += 1
                 # CORRECTION: decompose missed-fraud value by cause
                 if agent.remaining_budget <= 0:
-                    # Pacing loss: budget exhausted, audit was physically impossible
-                    regret_pacing += u_t
-                    agent.local_regret_pacing += u_t
+                    # Knapsack capacity loss: budget exhausted, audit was physically impossible
+                    regret_knapsackcapacity += u_t
+                    agent.local_regret_knapsackcapacity += u_t
                 else:
                     # Bandit loss: budget available, but the model mis-scored the claim
                     regret_bandit += u_t
@@ -198,7 +198,7 @@ if __name__ == "__main__":
 
         agent.learn(x_t, action, reward)
 
-        # CORRECTION: Adaptive pacing update
+        # CORRECTION: Adaptive knapsack capacity update
         lambda_prices[branch_id] = max(0.0, lambda_prices[branch_id] + eta * (cost_t - target_rate))
 
         pbar.update(1)
@@ -213,9 +213,9 @@ if __name__ == "__main__":
                 'Total_Budget': TOTAL_BUDGET,
                 'Budget_Per_Branch': budget_per_branch,
                 'Sync_Interval': SYNC_INTERVAL,
-                'Global_Cumulative_Regret': regret_bandit + regret_pacing,
+                'Global_Cumulative_Regret': regret_bandit + regret_knapsackcapacity,
                 'Global_Regret_Bandit': regret_bandit,
-                'Global_Regret_Pacing': regret_pacing,
+                'Global_Regret_KnapsackCapacity': regret_knapsackcapacity,
                 'Global_Regret_Knapsack': sum(a.regret_packing for a in agents.values()),
                 'Global_Utility_Saved': global_utility_saved,
                 'Global_Frauds_Caught': global_caught,
@@ -228,9 +228,9 @@ if __name__ == "__main__":
                 record[f'{a.name}_Audits'] = a.audits_done
                 record[f'{a.name}_Caught'] = a.frauds_caught
                 record[f'{a.name}_ShadowPrice'] = round(lambda_prices[b_id], 4)
-                record[f'{a.name}_Regret'] = a.local_regret_bandit + a.local_regret_pacing
+                record[f'{a.name}_Regret'] = a.local_regret_bandit + a.local_regret_knapsackcapacity
                 record[f'{a.name}_RegretBandit'] = a.local_regret_bandit
-                record[f'{a.name}_RegretPacing'] = a.local_regret_pacing
+                record[f'{a.name}_RegretKnapsackCapacity'] = a.local_regret_knapsackcapacity        
                 record[f'{a.name}_RegretKnapsack'] = a.regret_packing
 
             history_log.append(record)
@@ -266,9 +266,9 @@ if __name__ == "__main__":
     print(f"Global Audit Precision (Hit Rate): {final_hit_rate:.2f}%")
 
     print("\n--- Global Regret Decomposition ---")
-    print(f"Total Causal Regret: {regret_bandit + regret_pacing:.2f}")
+    print(f"Total Causal Regret: {regret_bandit + regret_knapsackcapacity:.2f}")
     print(f"  -> Selection (Bandit) Regret: {regret_bandit:.2f}")
-    print(f"  -> Pacing Regret (missed @ empty budget): {regret_pacing:.2f}")
+    print(f"  -> Knapsack Capacity Regret (missed @ empty budget): {regret_knapsackcapacity:.2f}")
     print(f"Knapsack (Packing) Regret vs hindsight OPT: "
           f"{sum(a.regret_packing for a in agents.values()):.2f}")
 
@@ -278,7 +278,7 @@ if __name__ == "__main__":
         print(f"  Audits: {agent.audits_done} / {budget_per_branch}")
         print(f"  Caught: {agent.frauds_caught}")
         print(f"  Final Shadow Price (λ): {lambda_prices[branch_id]:.4f}")
-        print(f"  Causal Regret: {agent.local_regret_bandit + agent.local_regret_pacing:.2f} "
-              f"(Bandit: {agent.local_regret_bandit:.2f} | Pacing: {agent.local_regret_pacing:.2f})")
+        print(f"  Causal Regret: {agent.local_regret_bandit + agent.local_regret_knapsackcapacity:.2f} "
+              f"(Bandit: {agent.local_regret_bandit:.2f} | Knapsack Capacity: {agent.local_regret_knapsackcapacity:.2f})")
         print(f"  Packing Regret (vs OPT): {agent.regret_packing:.2f}")
     print("=" * 60)

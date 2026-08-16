@@ -62,7 +62,7 @@ if __name__ == "__main__":
     # IMPROVEMENT: causal regret decomposes into selection (bandit) and pacing terms;
     # the knapsack (packing) regret is measured against the hindsight-optimal contents.
     regret_bandit = 0.0
-    regret_pacing = 0.0
+    regret_knapsackcapacity = 0.0
     opt_heap = []   # min-heap of the top-`TOTAL_BUDGET` fraud values arrived so far
     opt_sum = 0.0   # = hindsight-optimal knapsack value (OPT)
     history_log = [] 
@@ -119,11 +119,11 @@ if __name__ == "__main__":
                 missed_frauds += 1
                 # Decompose missed-fraud value by cause
                 if remaining_budget <= 0:
-                    regret_pacing += utility   # pacing loss: budget exhausted, audit impossible
+                    regret_knapsackcapacity += utility   # knapsack capacity loss: budget exhausted, audit impossible
                 else:
                     regret_bandit += utility   # bandit loss: budget available but claim mis-scored
             
-        # CORRECTION: adaptive pacing (remaining budget / remaining steps)
+        # CORRECTION: adaptive knapsack capacity update (remaining budget / remaining steps)
         remaining_steps = max(1, n_live - t - 1)
         target_rate = remaining_budget / remaining_steps
         lambda_price = max(0.0, lambda_price + eta * (cost_t - target_rate))
@@ -133,9 +133,9 @@ if __name__ == "__main__":
             record = {
                 'Claims_Processed': t + 1,
                 'Total_Budget': TOTAL_BUDGET,
-                'Cumulative_Regret': regret_bandit + regret_pacing,
+                'Cumulative_Regret': regret_bandit + regret_knapsackcapacity,
                 'Regret_Bandit': regret_bandit,
-                'Regret_Pacing': regret_pacing,
+                'Regret_KnapsackCapacity': regret_knapsackcapacity,
                 'Regret_Knapsack': max(0.0, opt_sum - total_utility_saved),
                 'Total_Utility_Saved': total_utility_saved,
                 'Frauds_Caught': frauds_caught,
@@ -158,6 +158,7 @@ if __name__ == "__main__":
     pd.DataFrame(history_log).to_csv(full_path, index=False)
     print(f"\n[SUCCESS] Simulation complete! Data saved to: {full_path}")
 
+    # Regret packing is the difference between the hindsight-optimal knapsack value (OPT) and the total utility saved by the algorithm.
     regret_packing = max(0.0, opt_sum - total_utility_saved)
 
     print("\n=== FINAL SINGLE-AGENT BwK EVALUATION ===")
@@ -168,9 +169,9 @@ if __name__ == "__main__":
     print(f"Total Utility Saved: {total_utility_saved:.1f}")
     print(f"Hindsight-Optimal Utility (OPT): {opt_sum:.1f}")
     print(f"Final Selection (Bandit) Regret: {regret_bandit:.2f}")
-    print(f"Final Pacing Regret (missed @ empty budget): {regret_pacing:.2f}")
+    print(f"Final Knapsack Capacity Regret (missed @ empty budget): {regret_knapsackcapacity:.2f}")
     print(f"Final Knapsack (Packing) Regret vs OPT: {regret_packing:.2f}")
-    print(f"Final Total Causal Regret: {regret_bandit + regret_pacing:.2f}")
-    
+    print(f"Final Total Causal Regret: {regret_bandit + regret_knapsackcapacity:.2f}")
+
     if total_audits > 0:
         print(f"Audit Precision (Hit Rate): {100*frauds_caught/total_audits:.2f}%")

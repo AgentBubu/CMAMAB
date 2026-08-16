@@ -21,7 +21,7 @@ class LocalBPJSAgent:
         self.local_regret = 0.0
         self.local_regret_bandit = 0.0
         # Kept for schema consistency with the BwK variant; identically 0 here
-        self.local_regret_knap = 0.0
+        self.local_regret_knapsackcapacity = 0.0
 
     def decide(self, x):
         x = x.reshape(-1, 1)
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     global_audits_done = 0
     global_caught = 0
     regret_bandit = 0.0
-    regret_knap = 0.0
+    regret_knapsackcapacity = 0.0
 
     history_log = []
     pbar = tqdm(total=n_live, desc="Processing Claims")
@@ -136,7 +136,7 @@ if __name__ == "__main__":
                 agent.local_regret_bandit += u_t
 
         agent.learn(x_t, action, reward)
-        agent.local_regret = agent.local_regret_bandit + agent.local_regret_knap
+        agent.local_regret = agent.local_regret_bandit + agent.local_regret_knapsackcapacity    
 
         pbar.update(1)
 
@@ -148,9 +148,9 @@ if __name__ == "__main__":
             record = {
                 'Claims_Processed': t + 1,
                 'Reference_Budget': REFERENCE_BUDGET,
-                'Global_Cumulative_Regret': regret_bandit + regret_knap,
+                'Global_Cumulative_Regret': regret_bandit + regret_knapsackcapacity,
                 'Global_Regret_Bandit': regret_bandit,
-                'Global_Regret_Knapsack': regret_knap,
+                'Global_Regret_KnapsackCapacity': regret_knapsackcapacity,
                 'Global_Utility_Saved': global_utility_saved,
                 'Global_Frauds_Caught': global_caught,
                 'Global_Missed_Frauds': global_missed_frauds,
@@ -166,7 +166,7 @@ if __name__ == "__main__":
                 record[f'{a.name}_Caught'] = a.frauds_caught
                 record[f'{a.name}_Regret'] = a.local_regret
                 record[f'{a.name}_RegretBandit'] = a.local_regret_bandit
-                record[f'{a.name}_RegretKnap'] = a.local_regret_knap
+                record[f'{a.name}_RegretKnapsackCapacity'] = a.local_regret_knapsackcapacity
 
             history_log.append(record)
 
@@ -186,6 +186,6 @@ if __name__ == "__main__":
           f"({global_audits_done / REFERENCE_BUDGET:.2f}x the available workforce)")
     print(f"Global Frauds Caught: {global_caught} | Missed: {global_missed_frauds}")
     print(f"Total Network Utility Saved: {global_utility_saved}")
-    print(f"Selection (Bandit) Regret: {regret_bandit:.2f} | Pacing (Knapsack) Regret: {regret_knap:.2f}")
+    print(f"Selection (Bandit) Regret: {regret_bandit:.2f} | Knapsack Capacity Regret: {regret_knapsackcapacity:.2f}")
     if global_audits_done > 0:
         print(f"Federated Audit Precision (Hit Rate): {100 * global_caught / global_audits_done:.2f}%")
