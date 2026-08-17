@@ -10,19 +10,21 @@ from tqdm import tqdm
 # 1. THE LOCAL BPJS AGENT CLASS (LinUCB + BwK)
 # ---------------------------------------------------------
 class LocalBPJSAgent:
-    def __init__(self, name, n_features, budget, alpha=1.0):
+    def __init__(self, name, n_features, daily_budget, alpha=1.0):
         self.name = name
         self.alpha = alpha
-        self.budget = budget
-        self.remaining_budget = budget
+        self.daily_budget = daily_budget
+        self.remaining_budget = daily_budget
 
+        # BwK Shadow Price Variables
+        self.lambda_price = 0.0
+        self.eta = 0.05
+        
         # Causal regret counters
-        self.local_regret_bandit = 0.0   # scorer fault: missed fraud w/ budget left, wasted slots
-        self.local_regret_knapsackcapacity = 0.0   # constraint fault: missed fraud because budget was empty
+        self.local_regret_bandit = 0.0   
+        self.local_regret_knapsackcapacity = 0.0   
 
         # Arm 1 (Audit) Memory Matrices
-        # CORRECTION: Null arm (Auto-Approve) has a known reward of exactly 0,
-        # so no matrices are needed for it.
         self.A_1 = np.eye(n_features)
         self.b_1 = np.zeros((n_features, 1))
 
@@ -30,14 +32,14 @@ class LocalBPJSAgent:
         self.frauds_caught = 0
         self.utility_saved = 0.0
 
-        # IMPROVEMENT: hindsight-optimal knapsack (top-`budget` fraud values arrived so
-        # far). Packing regret = frauds let go + clean claims let in, net of misses no
-        # policy could have avoided (frauds beyond the B best).
+        # Hindsight-optimal knapsack trackers
         self._opt_heap = []
         self._opt_sum = 0.0
+        self.cumulative_opt_sum = 0.0 # Stores previous days' optimal scores
 
     def observe_fraud(self, u):
-        if len(self._opt_heap) < self.budget:
+        # The crystal ball packs the best items FOR TODAY
+        if len(self._opt_heap) < self.daily_budget:
             heapq.heappush(self._opt_heap, u)
             self._opt_sum += u
         elif u > self._opt_heap[0]:
@@ -45,39 +47,53 @@ class LocalBPJSAgent:
 
     @property
     def regret_packing(self):
-        return max(0.0, self._opt_sum - self.utility_saved)
+        # Total optimal possible minus what the agent actually saved
+        return max(0.0, (self.cumulative_opt_sum + self._opt_sum) - self.utility_saved)
 
-    def decide(self, x, lambda_price):
+    def decide(self, x):
         x = x.reshape(-1, 1)
-
+        
+        # Arm 0 (Auto-Approve) score is always exactly 0
+        score_0 = 0.0
+        
         A1_inv = np.linalg.inv(self.A_1)
         theta_1 = A1_inv.dot(self.b_1)
         score_1 = theta_1.T.dot(x)[0, 0] + self.alpha * np.sqrt(x.T.dot(A1_inv).dot(x)[0, 0])
 
-        # CORRECTION: Decision rule compares UCB score directly against shadow price
-        penalized_score_1 = score_1 - lambda_price
+        penalized_score_1 = score_1 - self.lambda_price
 
-        if penalized_score_1 > 0 and self.remaining_budget > 0:
+        if penalized_score_1 > score_0 and self.remaining_budget > 0:
             return 1  # AUDIT
         else:
             return 0  # AUTO-APPROVE
 
-    def learn(self, x, action, reward):
-        # CORRECTION: Only update matrices if an audit was performed.
-        # Auto-approved claims yield no ground-truth feedback.
+    def learn(self, x, action, reward, cost, target_rate):
         if action == 1:
             x = x.reshape(-1, 1)
             self.A_1 += x.dot(x.T)
             self.b_1 += reward * x
             self.audits_done += 1
             self.remaining_budget -= 1
+            
+        # Update Shadow Price internally based on the dynamic target rate
+        self.lambda_price = max(0.0, self.lambda_price + self.eta * (cost - target_rate))
+
+    def reset_for_new_day(self):
+        # 1. Lock in yesterday's optimal score and clear the heap for today
+        self.cumulative_opt_sum += self._opt_sum
+        self._opt_heap = []
+        self._opt_sum = 0.0
+        
+        # 2. Refill the human auditor budget
+        self.remaining_budget = self.daily_budget
+        
+        # 3. Reset the shadow price (a new day means zero pacing pressure at 8:00 AM)
+        self.lambda_price = 0.0
 
 # ---------------------------------------------------------
 # 2. THE CENTRAL SERVER (Federated Aggregator)
 # ---------------------------------------------------------
 def federated_sync(agents):
-    # CORRECTION: Weighted aggregation based on the number of audits (n_i).
-    # Unweighted averaging dilutes the confidence regions of experienced agents.
     total_audits = sum(agent.audits_done for agent in agents)
     if total_audits == 0:
         return
@@ -94,7 +110,7 @@ def federated_sync(agents):
         agent.A_1 = avg_A_1.copy()
         agent.b_1 = avg_b_1.copy()
 
-    print(f"   [Central Server] Federated Sync Complete! Global Blueprint updated.")
+    # print(f"   [Central Server] Federated Sync Complete! Global Blueprint updated.")
 
 # ==========================================
 # 3. MAIN SIMULATION BLOCK
@@ -123,20 +139,19 @@ if __name__ == "__main__":
     X_live = scaler.fit_transform(X_raw)
     n_features = X_live.shape[1]
 
-    TOTAL_BUDGET = 1500
-    budget_per_branch = TOTAL_BUDGET // len(top_branches)
-    SYNC_INTERVAL = 500
-    eta = 0.05
+    # --- NEW TIMELINE & BUDGET PARAMETERS ---
+    CLAIMS_PER_DAY = 1000
+    DAILY_BUDGET_PER_BRANCH = 500 
+    SYNC_INTERVAL = 250
 
     agents = {
-        top_branches[0]: LocalBPJSAgent(f"Branch_{top_branches[0]}", n_features, budget_per_branch),
-        top_branches[1]: LocalBPJSAgent(f"Branch_{top_branches[1]}", n_features, budget_per_branch),
-        top_branches[2]: LocalBPJSAgent(f"Branch_{top_branches[2]}", n_features, budget_per_branch)
+        top_branches[0]: LocalBPJSAgent(f"Branch_{top_branches[0]}", n_features, DAILY_BUDGET_PER_BRANCH),
+        top_branches[1]: LocalBPJSAgent(f"Branch_{top_branches[1]}", n_features, DAILY_BUDGET_PER_BRANCH),
+        top_branches[2]: LocalBPJSAgent(f"Branch_{top_branches[2]}", n_features, DAILY_BUDGET_PER_BRANCH)
     }
 
-    lambda_prices = {b: 0.0 for b in top_branches}
-
     print(f"\nStarting Federated Live Simulation with {n_live} claims across 3 Branches...")
+    print(f"Daily Capacity: {DAILY_BUDGET_PER_BRANCH} audits per branch per day.")
 
     global_missed_frauds = 0
     global_utility_saved = 0.0
@@ -156,16 +171,14 @@ if __name__ == "__main__":
 
         agent = agents[branch_id]
 
-        # IMPROVEMENT: every arrived fraud updates the hindsight-optimal knapsack,
-        # audited or not, so packing regret has its reference benchmark.
         if y_t == 1:
             agent.observe_fraud(u_t)
 
-        # CORRECTION: Adaptive target rate
-        remaining_steps = max(1, n_live - t - 1)
-        target_rate = agent.remaining_budget / remaining_steps
+        # ADAPTIVE TARGET RATE (Based on claims remaining TODAY)
+        claims_left_today = CLAIMS_PER_DAY - (t % CLAIMS_PER_DAY)
+        target_rate = agent.remaining_budget / claims_left_today
 
-        action = agent.decide(x_t, lambda_prices[branch_id])
+        action = agent.decide(x_t)
 
         if action == 1:
             cost_t = 1
@@ -178,31 +191,26 @@ if __name__ == "__main__":
                 agent.utility_saved += u_t
             else:
                 reward = -0.5 * u_t
-                # Selection error: slot wasted on a clean claim, costed at shadow price
-                regret_bandit += lambda_prices[branch_id]
-                agent.local_regret_bandit += lambda_prices[branch_id]
+                regret_bandit += agent.lambda_price
+                agent.local_regret_bandit += agent.lambda_price
         else:
             cost_t = 0
             reward = 0.0
             if y_t == 1:
                 global_missed_frauds += 1
-                # CORRECTION: decompose missed-fraud value by cause
                 if agent.remaining_budget <= 0:
-                    # Knapsack capacity loss: budget exhausted, audit was physically impossible
                     regret_knapsackcapacity += u_t
                     agent.local_regret_knapsackcapacity += u_t
                 else:
-                    # Bandit loss: budget available, but the model mis-scored the claim
                     regret_bandit += u_t
                     agent.local_regret_bandit += u_t
 
-        agent.learn(x_t, action, reward)
-
-        # CORRECTION: Adaptive knapsack capacity update
-        lambda_prices[branch_id] = max(0.0, lambda_prices[branch_id] + eta * (cost_t - target_rate))
+        # Learn and update local shadow price
+        agent.learn(x_t, action, reward, cost_t, target_rate)
 
         pbar.update(1)
 
+        # --- EVENT 1: FEDERATED SYNC ---
         if (t + 1) % SYNC_INTERVAL == 0:
             federated_sync(list(agents.values()))
 
@@ -210,8 +218,7 @@ if __name__ == "__main__":
 
             record = {
                 'Claims_Processed': t + 1,
-                'Total_Budget': TOTAL_BUDGET,
-                'Budget_Per_Branch': budget_per_branch,
+                'Daily_Budget_Per_Branch': DAILY_BUDGET_PER_BRANCH,
                 'Sync_Interval': SYNC_INTERVAL,
                 'Global_Cumulative_Regret': regret_bandit + regret_knapsackcapacity,
                 'Global_Regret_Bandit': regret_bandit,
@@ -227,7 +234,7 @@ if __name__ == "__main__":
             for b_id, a in agents.items():
                 record[f'{a.name}_Audits'] = a.audits_done
                 record[f'{a.name}_Caught'] = a.frauds_caught
-                record[f'{a.name}_ShadowPrice'] = round(lambda_prices[b_id], 4)
+                record[f'{a.name}_ShadowPrice'] = round(a.lambda_price, 4)
                 record[f'{a.name}_Regret'] = a.local_regret_bandit + a.local_regret_knapsackcapacity
                 record[f'{a.name}_RegretBandit'] = a.local_regret_bandit
                 record[f'{a.name}_RegretKnapsackCapacity'] = a.local_regret_knapsackcapacity        
@@ -235,10 +242,15 @@ if __name__ == "__main__":
 
             history_log.append(record)
 
+        # --- EVENT 2: END OF THE DAY (RESET BUDGETS) ---
+        if (t + 1) % CLAIMS_PER_DAY == 0:
+            for a in agents.values():
+                a.reset_for_new_day()
+
     pbar.close()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"MAMAB_Results_{timestamp}.csv"
+    filename = f"Federated_LinUCB_BwK_Results_{timestamp}.csv"
     full_path = os.path.join(results_dir, filename)
 
     pd.DataFrame(history_log).to_csv(full_path, index=False)
@@ -248,10 +260,11 @@ if __name__ == "__main__":
     # FINAL TERMINAL PRINT
     # ---------------------------------------------------------
     print("\n" + "=" * 60)
-    print("=== FINAL FEDERATED MAMAB EVALUATION ===")
+    print("=== FINAL FEDERATED LinUCB BwK EVALUATION ===")
     print("=" * 60)
-    print(f"Total Claims Processed: {n_live}")
-    print(f"Total Global Budget: {TOTAL_BUDGET} ({budget_per_branch} per branch)")
+    total_days = n_live // CLAIMS_PER_DAY
+    print(f"Total Claims Processed: {n_live} ({total_days} Days)")
+    print(f"Daily Capacity: {DAILY_BUDGET_PER_BRANCH} audits per branch")
 
     print("\n--- Global Network Performance ---")
     print(f"Global Audits Done: {global_audits_done}")
@@ -267,18 +280,8 @@ if __name__ == "__main__":
 
     print("\n--- Global Regret Decomposition ---")
     print(f"Total Causal Regret: {regret_bandit + regret_knapsackcapacity:.2f}")
-    print(f"  -> Selection (Bandit) Regret: {regret_bandit:.2f}")
-    print(f"  -> Knapsack Capacity Regret (missed @ empty budget): {regret_knapsackcapacity:.2f}")
+    print(f"  -> Algorithmic (Bandit) Regret: {regret_bandit:.2f}")
+    print(f"  -> Capacity (Pacing) Regret: {regret_knapsackcapacity:.2f}")
     print(f"Knapsack (Packing) Regret vs hindsight OPT: "
           f"{sum(a.regret_packing for a in agents.values()):.2f}")
-
-    print("\n--- Per-Branch Breakdown ---")
-    for branch_id, agent in agents.items():
-        print(f"Branch {branch_id}:")
-        print(f"  Audits: {agent.audits_done} / {budget_per_branch}")
-        print(f"  Caught: {agent.frauds_caught}")
-        print(f"  Final Shadow Price (λ): {lambda_prices[branch_id]:.4f}")
-        print(f"  Causal Regret: {agent.local_regret_bandit + agent.local_regret_knapsackcapacity:.2f} "
-              f"(Bandit: {agent.local_regret_bandit:.2f} | Knapsack Capacity: {agent.local_regret_knapsackcapacity:.2f})")
-        print(f"  Packing Regret (vs OPT): {agent.regret_packing:.2f}")
     print("=" * 60)

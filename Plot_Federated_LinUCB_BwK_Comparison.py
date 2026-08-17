@@ -46,7 +46,7 @@ def plot_branch_bandit_regret(df, graphs_dir):
             ax.axvline(x=sync_point, color='gray', linestyle='--', linewidth=1.0, alpha=0.3)
 
     # 5. Add titles and custom labels
-    ax.set_title("Decentralized Network: Algorithmic (Bandit) Regret per Branch", fontweight='bold', fontsize=14)
+    ax.set_title("Bandit Regret per Branch", fontweight='bold', fontsize=14)
     ax.set_xlabel("Simulated Time", fontweight='bold')
     ax.set_ylabel("Cumulative Bandit Regret", fontweight='bold')
     
@@ -77,51 +77,51 @@ def plot_branch_bandit_regret(df, graphs_dir):
 def plot_daily_bandit_regret(df, graphs_dir):
     print("Generating Daily Bandit Regret Comparison...")
     
-    # 1. Identify the Bandit Regret columns
     bandit_regret_cols = [c for c in df.columns if c.endswith('_RegretBandit') and not c.startswith('Global')]
     branch_names = [c.replace('_RegretBandit', '') for c in bandit_regret_cols]
     
-    # 2. Calculate the "Daily" (Incremental) Regret using diff()
-    # df[col].diff() subtracts the previous row's value from the current row's value.
-    # This gives us exactly how much regret was generated during that specific Sync Interval!
     daily_df = pd.DataFrame()
     daily_df['Claims_Processed'] = df['Claims_Processed']
     
-    # Create our custom timescale (1 Day = 1000 Claims)
     CLAIMS_PER_DAY = 1000
     daily_df['Simulated_Days'] = df['Claims_Processed'] / CLAIMS_PER_DAY
     
     for col in bandit_regret_cols:
-        # Fill the first NaN with the actual first row's value
         daily_df[f'{col}_Daily'] = df[col].diff().fillna(df[col].iloc[0])
 
-    # 3. Create the plot
     fig, ax = plt.subplots(figsize=(12, 6))
     colors = ['#1abc9c', '#f1c40f', '#e67e22', '#34495e']
     
-    # We use a line plot with markers (dots) to show the discrete daily chunks
     for i, col in enumerate(bandit_regret_cols):
         clean_name = branch_names[i].replace('_', ' ')
         ax.plot(daily_df['Simulated_Days'], daily_df[f'{col}_Daily'], 
                 label=clean_name, linewidth=2.0, marker='o', markersize=4, color=colors[i % len(colors)])
 
-    # 4. Add titles and labels
-    ax.set_title("Decentralized Network: Daily Algorithmic Mistakes (Bandit Regret) per Branch", fontweight='bold', fontsize=14)
+    ax.set_title("Daily Bandit Regret per Branch", fontweight='bold', fontsize=14)
     ax.set_xlabel("Simulated Time", fontweight='bold')
-    ax.set_ylabel("Mistakes Made per Sync Interval (Regret)", fontweight='bold')
-    
-    # Format the X-axis
+    ax.set_ylabel("Bandit Regret", fontweight='bold')
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('Day %g'))
     
-    # Draw vertical lines for the End of the Day only (to avoid clutter)
+    # Draw vertical lines for End of Day (Solid) and Syncs (Dashed)
+    sync_interval_claims = int(df['Sync_Interval'].iloc[0])
+    sync_interval_days = sync_interval_claims / CLAIMS_PER_DAY
     max_days = daily_df['Simulated_Days'].max()
-    for day in np.arange(1.0, max_days + 1.0, 1.0):
-        ax.axvline(x=day, color='#2c3e50', linestyle='-', linewidth=1.0, alpha=0.3)
 
-    # 5. Legend
-    ax.legend(title="Regional Branches", bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+    for sync_point in np.arange(sync_interval_days, max_days + sync_interval_days, sync_interval_days):
+        if sync_point.is_integer():
+            ax.axvline(x=sync_point, color='#2c3e50', linestyle='-', linewidth=1.2, alpha=0.6)
+        else:
+            ax.axvline(x=sync_point, color='gray', linestyle='--', linewidth=1.0, alpha=0.3)
+
+    # Add custom legend for lines
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color='#2c3e50', linestyle='-', lw=1.2, alpha=0.6))
+    labels.append("End of Day")
+    handles.append(Line2D([0], [0], color='gray', linestyle='--', lw=1.0, alpha=0.3))
+    labels.append("Federated Sync")
     
-    # 6. Save
+    ax.legend(handles, labels, title="Legend", bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+    
     save_path = os.path.join(graphs_dir, "Federated_Branch_Daily_Bandit_Regret.png")
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -135,12 +135,9 @@ def plot_branch_knapsack_regret(df, graphs_dir):
     print("Generating Branch-Level Knapsack Regret Comparison (Time Scale)...")
     
     fig, ax = plt.subplots(figsize=(10, 6))
-    
     CLAIMS_PER_DAY = 1000
     df['Simulated_Days'] = df['Claims_Processed'] / CLAIMS_PER_DAY
     
-    # Dynamically find the Knapsack Regret columns 
-    # (Matches 'Branch_601_RegretKnapsack', 'Branch_1301_RegretKnapsack', etc.)
     knapsack_regret_cols = [c for c in df.columns if c.endswith('_RegretKnapsack') and not c.startswith('Global')]
     branch_names = [c.replace('_RegretKnapsack', '') for c in knapsack_regret_cols]
     
@@ -150,7 +147,6 @@ def plot_branch_knapsack_regret(df, graphs_dir):
         clean_name = branch_names[i].replace('_', ' ')
         ax.plot(df['Simulated_Days'], df[col], label=clean_name, linewidth=2.5, color=colors[i % len(colors)])
 
-    # Draw vertical dashed lines for Sync Intervals
     sync_interval_claims = int(df['Sync_Interval'].iloc[0])
     sync_interval_days = sync_interval_claims / CLAIMS_PER_DAY
     max_days = df['Simulated_Days'].max()
@@ -161,9 +157,12 @@ def plot_branch_knapsack_regret(df, graphs_dir):
         else:
             ax.axvline(x=sync_point, color='gray', linestyle='--', linewidth=1.0, alpha=0.3)
 
-    ax.set_title("Decentralized Network: Knapsack (Packing) Regret per Branch", fontweight='bold', fontsize=14)
+    ax.set_title("Knapsack Regret per Branch", fontweight='bold', fontsize=14)
     ax.set_xlabel("Simulated Time", fontweight='bold')
-    ax.set_ylabel("Cumulative Knapsack Regret (vs. Hindsight OPT)", fontweight='bold')
+    
+    # [FIXED]: Updated Y-Axis to be easily understood by non-technical audiences
+    #ax.set_ylabel("Knapsack Regret (vs. Maximum Possible Savings)", fontweight='bold')
+    ax.set_ylabel("Knapsack Regret", fontweight='bold')
     
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('Day %g'))
     
@@ -181,6 +180,7 @@ def plot_branch_knapsack_regret(df, graphs_dir):
     
     print(f" -> Saved to {save_path}")
 
+
 # ---------------------------------------------------------
 # GRAPH FUNCTION 4: Daily (Per-Epoch) Knapsack Regret
 # ---------------------------------------------------------
@@ -196,7 +196,6 @@ def plot_daily_knapsack_regret(df, graphs_dir):
     CLAIMS_PER_DAY = 1000
     daily_df['Simulated_Days'] = df['Claims_Processed'] / CLAIMS_PER_DAY
     
-    # Calculate the incremental (Daily) Knapsack Regret
     for col in knapsack_regret_cols:
         daily_df[f'{col}_Daily'] = df[col].diff().fillna(df[col].iloc[0])
 
@@ -208,17 +207,33 @@ def plot_daily_knapsack_regret(df, graphs_dir):
         ax.plot(daily_df['Simulated_Days'], daily_df[f'{col}_Daily'], 
                 label=clean_name, linewidth=2.0, marker='o', markersize=4, color=colors[i % len(colors)])
 
-    ax.set_title("Decentralized Network: Daily Knapsack Efficiency (Packing Regret) per Branch", fontweight='bold', fontsize=14)
+    ax.set_title("Daily Knapsack Regret per Branch", fontweight='bold', fontsize=14)
     ax.set_xlabel("Simulated Time", fontweight='bold')
-    ax.set_ylabel("Knapsack Mistakes per Sync Interval", fontweight='bold')
     
+    # [FIXED]: Made Y-Axis clearer
+    #ax.set_ylabel("Loss vs. Maximum Possible Savings per Sync", fontweight='bold')
+    ax.set_ylabel("Knapsack Regret", fontweight='bold')
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('Day %g'))
     
+    # Draw vertical lines for End of Day (Solid) and Syncs (Dashed)
+    sync_interval_claims = int(df['Sync_Interval'].iloc[0])
+    sync_interval_days = sync_interval_claims / CLAIMS_PER_DAY
     max_days = daily_df['Simulated_Days'].max()
-    for day in np.arange(1.0, max_days + 1.0, 1.0):
-        ax.axvline(x=day, color='#2c3e50', linestyle='-', linewidth=1.0, alpha=0.3)
 
-    ax.legend(title="Regional Branches", bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+    for sync_point in np.arange(sync_interval_days, max_days + sync_interval_days, sync_interval_days):
+        if sync_point.is_integer():
+            ax.axvline(x=sync_point, color='#2c3e50', linestyle='-', linewidth=1.2, alpha=0.6)
+        else:
+            ax.axvline(x=sync_point, color='gray', linestyle='--', linewidth=1.0, alpha=0.3)
+
+    # Add custom legend for lines
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color='#2c3e50', linestyle='-', lw=1.2, alpha=0.6))
+    labels.append("End of Day")
+    handles.append(Line2D([0], [0], color='gray', linestyle='--', lw=1.0, alpha=0.3))
+    labels.append("Federated Sync")
+    
+    ax.legend(handles, labels, title="Legend", bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
     
     save_path = os.path.join(graphs_dir, "Federated_Branch_Daily_Knapsack_Regret.png")
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -249,7 +264,7 @@ def plot_precision_convergence(df, graphs_dir):
         ax.plot(df['Simulated_Days'], hit_rate, label=clean_name, linewidth=2.0, color=colors[i % len(colors)])
 
     ax.set_ylim(0, 100)
-    ax.set_title("Decentralized Network: Audit Precision (Hit Rate)", fontweight='bold', fontsize=14)
+    ax.set_title("Audit Precision (Hit Rate)", fontweight='bold', fontsize=14)
     ax.set_xlabel("Simulated Time", fontweight='bold')
     ax.set_ylabel("Audit Precision (Hit Rate %)", fontweight='bold')
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('Day %g'))
@@ -267,7 +282,7 @@ def plot_precision_convergence(df, graphs_dir):
 
 
 # ---------------------------------------------------------
-# GRAPH FUNCTION 6: Budget Pacing vs Shadow Price (For Branch 1)
+# GRAPH FUNCTION 6: Budget Pacing vs Shadow Price 
 # ---------------------------------------------------------
 def plot_budget_pacing(df, graphs_dir):
     print("Generating Budget Pacing vs Shadow Price...")
@@ -275,18 +290,19 @@ def plot_budget_pacing(df, graphs_dir):
     CLAIMS_PER_DAY = 1000
     df['Simulated_Days'] = df['Claims_Processed'] / CLAIMS_PER_DAY
     
-    # We will just plot the first branch as an example of the internal mechanics
     caught_cols = [c for c in df.columns if c.endswith('_Caught') and not c.startswith('Global')]
-    # Change the [] to select the branch (0,1,2)
-    first_branch = caught_cols[2].replace('_Caught', '')
+    first_branch = caught_cols[2].replace('_Caught', '') 
     
     color1 = '#3498db'
-    ax1.set_xlabel("Simulated Time", fontweight='bold')
-    ax1.set_ylabel(f"Audits Performed ({first_branch})", color=color1, fontweight='bold')
+    ax1.set_xlabel("Simulated Time (Days)", fontweight='bold')
+    ax1.set_ylabel(f"Cumulative Audits Performed ({first_branch})", color=color1, fontweight='bold')
     line1 = ax1.plot(df['Simulated_Days'], df[f'{first_branch}_Audits'], color=color1, linewidth=2.5, label='Audits Performed')
     
-    local_budget = df['Budget_Per_Branch'].iloc[0]
-    line2 = ax1.axhline(local_budget, color='black', linestyle='--', linewidth=1.5, label='Local Auditor Budget')
+    # [FIXED]: Calculate the Cumulative Budget instead of a flat line
+    daily_budget = df['Daily_Budget_Per_Branch'].iloc[0]
+    cumulative_budget = df['Simulated_Days'] * daily_budget
+    line2 = ax1.plot(df['Simulated_Days'], cumulative_budget, color='black', linestyle='--', linewidth=1.5, label='Cumulative Budget Limit')
+    
     ax1.tick_params(axis='y', labelcolor=color1)
 
     ax2 = ax1.twinx()  
@@ -295,14 +311,14 @@ def plot_budget_pacing(df, graphs_dir):
     line3 = ax2.plot(df['Simulated_Days'], df[f'{first_branch}_ShadowPrice'], color=color2, linewidth=2, alpha=0.7, label='Shadow Price (λ)')
     ax2.tick_params(axis='y', labelcolor=color2)
 
-    lines = line1 + [line2] + line3
+    lines = line1 + line2 + line3
     labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, bbox_to_anchor=(1.12, 1), loc='upper left')
 
     ax1.xaxis.set_major_formatter(ticker.FormatStrFormatter('Day %g'))
     plt.title(f"Bandits with Knapsacks: Budget Pacing ({first_branch.replace('_', ' ')})", fontweight='bold', fontsize=14)
     
-    plt.savefig(os.path.join(graphs_dir, "Federated_Budget_Pacing_ShadowPrice_Branch3.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(graphs_dir, f"Federated_Budget_Pacing_ShadowPrice_{first_branch}.png"), dpi=300, bbox_inches='tight')
     plt.close()
     print(" -> Saved Budget Pacing")
 
@@ -323,11 +339,13 @@ def plot_alert_fatigue_shield(df, graphs_dir):
         clean_name = col.replace('_Audits', '').replace('_', ' ')
         ax.plot(df['Simulated_Days'], df[col], label=clean_name, linewidth=2.5, color=colors[i % len(colors)])
 
-    local_budget = df['Budget_Per_Branch'].iloc[0]
-    ax.axhline(local_budget, color='#c0392b', linestyle='--', linewidth=2.0, label='Strict Local Budget Limit')
+    # [FIXED]: Calculate the Cumulative Budget instead of a flat line
+    daily_budget = df['Daily_Budget_Per_Branch'].iloc[0]
+    cumulative_budget = df['Simulated_Days'] * daily_budget
+    ax.plot(df['Simulated_Days'], cumulative_budget, color='#c0392b', linestyle='--', linewidth=2.0, label='Strict Cumulative Budget Limit')
 
     ax.set_title("The Alert Fatigue Shield: Protecting Human Auditors", fontweight='bold', fontsize=14)
-    ax.set_xlabel("Simulated Time", fontweight='bold')
+    ax.set_xlabel("Simulated Time (Days)", fontweight='bold')
     ax.set_ylabel("Cumulative Audits Performed", fontweight='bold')
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('Day %g'))
     
@@ -378,14 +396,14 @@ def plot_final_executive_summary(df, graphs_dir):
                             (p.get_x() + p.get_width() / 2., height), 
                             ha='center', va='bottom', fontsize=11, fontweight='bold', color='black', xytext=(0, 5), textcoords='offset points')
 
-    plt.title("Executive Summary: Final Performance Across Regional Agents", fontweight='bold', fontsize=14)
+    plt.title("Final Performance Across Regional Agents", fontweight='bold', fontsize=14)
     plt.xlabel("Local BPJS Agent", fontweight='bold')
     plt.ylabel("Number of Claims", fontweight='bold')
     plt.legend(title="Performance Metric", bbox_to_anchor=(1.02, 1), loc='upper left')
     
-    plt.savefig(os.path.join(graphs_dir, "Federated_Final_Executive_Summary.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(graphs_dir, "Federated_Final_Summary.png"), dpi=300, bbox_inches='tight')
     plt.close()
-    print(" -> Saved Final Executive Summary")
+    print(" -> Saved Final Summary")
 
 # ---------------------------------------------------------
 # MAIN EXECUTION BLOCK
@@ -397,7 +415,7 @@ if __name__ == "__main__":
     os.makedirs(graphs_dir, exist_ok=True)
 
     # --- AUTOMATICALLY FIND THE LATEST CSV ---
-    search_pattern = os.path.join(results_dir, "MAMAB_Results_20260816_212741.csv")
+    search_pattern = os.path.join(results_dir, "Federated_LinUCB_BwK_Results_20260817_224322.csv")
     list_of_files = glob.glob(search_pattern)
     
     if not list_of_files:
